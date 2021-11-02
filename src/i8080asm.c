@@ -5,12 +5,9 @@
 #include <assert.h>
 #include <stdarg.h>
 
-#define arrsize(a) (sizeof(a)/sizeof(a[0]))
+#include "i8080.h"
 
-typedef unsigned char  u8;
-typedef unsigned short u16;
-typedef char  i8;
-typedef short i16;
+#define arrsize(a) (sizeof(a)/sizeof(a[0]))
 
 #define MAX_ID_LEN 33
 
@@ -883,6 +880,7 @@ mkline(
     l = (struct Line *)malloc(sizeof(struct Line));
     if(l)
     {
+        l->type = type;
         l->ins = ins;
         l->op1 = op1;
         l->op2 = op2;
@@ -1063,6 +1061,7 @@ pline(void)
                         fatal("Pseudo-instruction 'db' must have a constant as operand");
                     }
 
+                    line = mkline(LINE_DB, 0, op1, 0, srcl, addr);
                     addr += 1;
                 }
                 else if(!strcmp(name, "dw"))
@@ -1077,6 +1076,7 @@ pline(void)
                         fatal("Pseudo-instruction 'dw' must have a constant as operand");
                     }
 
+                    line = mkline(LINE_DW, 0, op1, 0, srcl, addr);
                     addr += 2;
                 }
                 else if(!strcmp(name, "org"))
@@ -1168,23 +1168,24 @@ u8 code[0x1000];
 int codesz;
 
 void
-emit(u8 b)
+emit(FILE *f, u8 b)
 {
-    code[codesz++] = b;
+    fputc((int)b, f);
+    ++codesz;
 }
 
 void
-emitw(u16 w)
+emitw(FILE *f, u16 w)
 {
-    emit((u8)((w & 0x00ff) >> 0));
-    emit((u8)((w & 0xff00) >> 8));
+    emit(f, (u8)((w & 0x00ff) >> 0));
+    emit(f, (u8)((w & 0xff00) >> 8));
 }
 
 #define i8tou8(i)   ((u8)((((i)&0x80))?(256-(i)):(i)))
 #define i16tou16(i) ((u16)((((i)&0x8000))?(65535-(i)):(i)))
 
 void
-assemble(void)
+emitcode(FILE *fout)
 {
     struct Line *line;
     struct Ins *ins;
@@ -1192,34 +1193,34 @@ assemble(void)
     line = lines;
     while(line)
     {
-        assert(line->ins);
         ins = line->ins;
         srcl = line->line;
 
         if(line->type == LINE_DB)
         {
             i8 val = (i8)eval(line->op1->expr);
-            emit(i8tou8(val));
+            emit(fout, i8tou8(val));
         }
         else if(line->type == LINE_DW)
         {
             i16 val = (i16)eval(line->op1->expr);
-            emitw(i16tou16(val));
+            emitw(fout, i16tou16(val));
         }
         else if(line->type == LINE_NRML)
         {
+            assert(ins);
             switch(ins->enc)
             {
                 case ENC_SIMPLE:
                 {
-                    emit(ins->opc);
+                    emit(fout, ins->opc);
                 } break;
 
                 case ENC_IMM8:
                 {
                     int val;
 
-                    emit(ins->opc);
+                    emit(fout, ins->opc);
                     if(line->op1->type == OP_IMM)
                     {
                         val = eval(line->op1->expr);
@@ -1233,14 +1234,14 @@ assemble(void)
                         fatal("Value %d cannot fit 8 bit", val);
                     }
                     val = val & 0xff;
-                    emit(i8tou8(val));
+                    emit(fout, i8tou8(val));
                 } break;
 
                 case ENC_IMM16:
                 {
                     int val;
 
-                    emit(ins->opc);
+                    emit(fout, ins->opc);
                     if(line->op1->type == OP_IMM)
                     {
                         val = eval(line->op1->expr);
@@ -1254,7 +1255,7 @@ assemble(void)
                         fatal("Value %d cannot fit 16 bit", val);
                     }
                     val = val & 0xffff;
-                    emitw(i16tou16(val));
+                    emitw(fout, i16tou16(val));
                 } break;
 
                 default:
@@ -1271,91 +1272,171 @@ assemble(void)
 #undef i8tou8
 #undef i16tou16
 
-void
-disassemble(u8 *in, unsigned int insz, char *out)
+int
+printop(int op, char **out)
+{
+    int printed;
+
+    printed = 0;
+    switch(op)
+    {
+        case OP_REG_A:   { *out += sprintf(*out, "a");   printed = 1; } break;
+        case OP_REG_B:   { *out += sprintf(*out, "b");   printed = 1; } break;
+        case OP_REG_C:   { *out += sprintf(*out, "c");   printed = 1; } break;
+        case OP_REG_D:   { *out += sprintf(*out, "d");   printed = 1; } break;
+        case OP_REG_E:   { *out += sprintf(*out, "e");   printed = 1; } break;
+        case OP_REG_H:   { *out += sprintf(*out, "h");   printed = 1; } break;
+        case OP_REG_L:   { *out += sprintf(*out, "l");   printed = 1; } break;
+        case OP_REG_M:   { *out += sprintf(*out, "m");   printed = 1; } break;
+        case OP_REG_SP:  { *out += sprintf(*out, "sp");  printed = 1; } break;
+        case OP_REG_PSW: { *out += sprintf(*out, "psw"); printed = 1; } break;
+
+        default:
+        {
+            printed = 0;
+        } break;
+    }
+
+    return(printed);
+}
+
+int
+disassemble(u8 **in, unsigned int insz, char *out)
 {
     struct Ins *ins;
+    int size;
 
+    size = 1;
     if(insz == 0)
     {
         *out = 0;
     }
     else
     {
-        ins = getinsbyopc(in[0]);
+        ins = getinsbyopc(**in);
+        ++(*in);
         if(ins)
         {
             out += sprintf(out, "%s", ins->mnem);
-            if(ins->numop == 1)
+            if(ins->numop > 0)
             {
-                /* TODO */
+                out += sprintf(out, " ");
+                if(!printop(ins->op1, &out))
+                {
+                    if(ins->enc == ENC_IMM8)
+                    {
+                        size = 2;
+                        if(insz > 1)
+                        {
+                            out += sprintf(out, "0x%.2x", (unsigned int)**in);
+                            ++(*in);
+                        }
+                    }
+                    else if(ins->enc == ENC_IMM16)
+                    {
+                        size = 3;
+                        if(insz > 2)
+                        {
+                            out += sprintf(out, "0x%.4x", *((u16 *)(*in)));
+                            *in += 2;
+                        }
+                    }
+                }
+            }
+            if(ins->numop > 1)
+            {
+                out += sprintf(out, ",");
+                if(!printop(ins->op2, &out))
+                {
+                    if(ins->enc == ENC_IMM8)
+                    {
+                        size = 2;
+                        if(insz > 1)
+                        {
+                            out += sprintf(out, "0x%.2x", (unsigned int)**in);
+                            ++(*in);
+                        }
+                    }
+                    else if(ins->enc == ENC_IMM16)
+                    {
+                        size = 3;
+                        if(insz > 2)
+                        {
+                            out += sprintf(out, "0x%.4x", *((u16 *)(*in)));
+                            *in += 2;
+                        }
+                    }
+                }
             }
         }
         else
         {
-            strcpy(out, "-");
+            out += sprintf(out, "-");
         }
     }
+    *out = 0;
+
+    return(size);
 }
 
 int
-main()
+assemble(char *fnamein, char *fnameout)
 {
+    FILE *fin;
+    FILE *fout;
     int i;
-    char *_src =
-        "lxi h,msg\n"
-        "loop:\n"
-        "mov a,m\n"
-        "ora a\n"
-        "jz 0xe0\n"
-        "out 0x01\n"
-        "inx h\n"
-        "jmp loop\n"
-        "hlt\n"
-        "nop\n"
-        "msg:\n"
-        "db 0x48\n"
-        "db 0x65\n"
-        "db 0x6c\n"
-        "db 0x6c\n"
-        "db 0x6f\n"
-        "db 0x20\n"
-        "db 0x57\n"
-        "db 0x6f\n"
-        "db 0x72\n"
-        "db 0x6c\n"
-        "db 0x64\n"
-        "db 0x21\n"
-        "db 0x00\n"
-        "nop\n"
-        "nop\n"
-        "nop\n"
-        "\n\n\n"
-    ;
+    char *_src;
 
+    if(!fnamein || !fnameout)
+    {
+        return(1);
+    }
+
+    fin = fopen(fnamein, "r");
+    if(!fin)
+    {
+        return(2);
+    }
+    fseek(fin, 0, SEEK_END);
+    i = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
+    _src = (char*)malloc(i+1);
+    if(!_src)
+    {
+        return(3);
+    }
+    i = fread(_src, 1, i, fin);
+    _src[i] = 0;
+    fclose(fin);
+
+    fout = fopen(fnameout, "wb");
+    if(!fout)
+    {
+        return(4);
+    }
     src = _src;
     srcl = 1;
     addr = 0;
-
     /* Parsing + first pass */
     pprogram();
-
-    for(i = 0;
-        i < lblscount;
-        ++i)
-    {
-        printf("%s: %.2x\n", lbls[i].name, lbls[i].addr);
-    }
-
     /* Second pass (emitting code) */
-    assemble();
-
-    for(i = 0;
-        i < codesz;
-        ++i)
-    {
-        printf("%.2x%c", code[i], (i>0 && i%16==0) ? '\n' : ' ');
-    }
+    emitcode(fout);
+    fclose(fout);
 
     return(0);
 }
+
+#ifdef I8080ASM_STANDALONE
+
+int
+main(int argc, char *argv[])
+{
+    if(argc < 3)
+    {
+        printf("Usage: %s <source> <output>\n", argv[0]);
+    }
+
+    return(assemble(argv[1], argv[2]));
+}
+
+#endif

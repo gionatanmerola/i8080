@@ -2,9 +2,7 @@
 /**                         i8080 CPU                         **/
 /***************************************************************/
 
-typedef unsigned char  u8;
-typedef unsigned short u16;
-typedef unsigned int   u32;
+#include "i8080.h"
 
 typedef struct i8080 i8080;
 
