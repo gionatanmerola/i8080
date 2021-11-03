@@ -66,6 +66,7 @@ addlbl(char *name, unsigned int addr, int status)
     l->name[MAX_ID_LEN-1] = 0;
     l->addr = addr;
     l->status = status;
+    l->isconst = 0;
 
     return(l);
 }
@@ -879,7 +880,7 @@ next(void)
 
         default:
         {
-            fatal("Invalid token '%d'", (int)*src);
+            fatal("Invalid token '%c'", *src);
         } break;
     }
 
@@ -957,9 +958,11 @@ struct Expr *
 pexprbase(void)
 {
     struct Expr *e;
+    int t;
 
     e = 0;
-    switch(next())
+    t = next();
+    switch(t)
     {
         case T_LPAREN:
         {
@@ -1000,7 +1003,8 @@ pexprbase(void)
 
         default:
         {
-            fatal("Invalid primary expression");
+            fatal("Invalid primary expression, invalid token '%s' (#%d)",
+                tokstr[t], t);
         } break;
     }
 
@@ -1075,7 +1079,7 @@ exprisconst(struct Expr *e)
 
         case EXPR_LBL:
         {
-            return(1);
+            return(e->lbl->isconst);
         } break;
 
         case EXPR_MUL:
@@ -1160,15 +1164,37 @@ struct Line
     struct Op *op2;
     int line;
     unsigned int addr;
+    struct Expr *expr;
 
     struct Line *next;
 };
+
+struct Line *lines;
+struct Line *lastline;
+
+void
+addline(struct Line *l)
+{
+    if(l)
+    {
+        if(!lines)
+        {
+            lines = l;
+        }
+        if(lastline)
+        {
+            lastline->next = l;
+        }
+        lastline = l;
+    }
+}
 
 struct Line *
 mkline(
     int type,
     struct Ins *ins, struct Op *op1, struct Op *op2,
-    int line, unsigned int addr)
+    int line, unsigned int addr,
+    struct Expr *expr)
 {
     struct Line *l;
 
@@ -1182,6 +1208,7 @@ mkline(
         l->line = line;
         l->addr = addr;
         l->next = 0;
+        l->expr = expr;
     }
 
     return(l);
@@ -1305,186 +1332,183 @@ pline(void)
             next();
             strncpy(name, tokenlbl, MAX_ID_LEN);
 
-            t = peek();
-            if(t == T_COLON)
+            if(!strcmp(name, "db") || !strcmp(name, "DB"))
             {
-                struct Label *lbl;
-
-                next();
-                lbl = getlbl(name);
-                if(lbl)
-                {
-                    lbl->addr = addr;
-                    lbl->status = LBL_RESOLVED;
-                }
-                else
-                {
-                    addlbl(name, addr, LBL_RESOLVED);
-                }
-
-                t = peek();
-                if(t == T_EOL)
-                {
-                    expect(T_EOL);
-                }
-                line = pline();
-            }
-            else if(t == T_LABEL && (!strcmp(tokenlbl, "equ") || !strcmp(tokenlbl, "EQU")))
-            {
-                struct Label *lbl;
                 struct Expr *expr;
 
-                next();
-                lbl = getlbl(name);
-                if(lbl && lbl->status == LBL_RESOLVED)
+                do
                 {
-                    fatal("Label '%s' already defined", name);
+                    expr = pexpr();
+                    if(!exprisconst(expr))
+                    {
+                        fatal("Invalid constant expression for directive 'DB'");
+                    }
+                    line = mkline(LINE_DB, 0, 0, 0, srcl, addr, expr);
+                    addline(line);
+                    addr += 1;
+                    t = peek();
+                    if(t == T_COMMA)
+                    {
+                        next();
+                    }
                 }
+                while(t == T_COMMA);
+            }
+            else if(!strcmp(name, "dw") || !strcmp(name, "DW"))
+            {
+                struct Expr *expr;
 
-                expr = pexpr();
-                if(!exprisconst(expr))
+                do
                 {
-                    fatal("Invalid constant expression for directive 'equ'");
+                    expr = pexpr();
+                    if(!exprisconst(expr))
+                    {
+                        fatal("Invalid constant expression for directive 'DW'");
+                    }
+                    line = mkline(LINE_DW, 0, 0, 0, srcl, addr, expr);
+                    addline(line);
+                    addr += 2;
+                    t = peek();
+                    if(t == T_COMMA)
+                    {
+                        next();
+                    }
                 }
-
-                if(lbl)
-                {
-                    lbl->addr = eval(expr);
-                    lbl->status = LBL_RESOLVED;
-                }
-                else
-                {
-                    lbl = addlbl(name, eval(expr), LBL_RESOLVED);
-                }
-                expect(T_EOL);
+                while(t == T_COMMA);
             }
             else
             {
-                op1 = poperand();
-                if(op1)
+                t = peek();
+                if(t == T_COLON)
                 {
-                    ++numop;
-                    if(peek() == T_COMMA)
-                    {
-                        next();
-                        op2 = poperand();
-                        if(op2)
-                        {
-                            ++numop;
-                        }
-                    }
-                }
+                    struct Label *lbl;
 
-                if(!strcmp(name, "db") || !strcmp(name, "DB"))
-                {
-                    if(numop != 1)
+                    next();
+                    lbl = getlbl(name);
+                    if(lbl)
                     {
-                        fatal("Pseudo-instruction 'db' accept only one operand");
-                    }
-
-                    if(op1->type != OP_IMM || !exprisconst(op1->expr))
-                    {
-                        fatal("Pseudo-instruction 'db' must have a constant as operand");
-                    }
-
-                    line = mkline(LINE_DB, 0, op1, 0, srcl, addr);
-                    addr += 1;
-                }
-                else if(!strcmp(name, "dw") || !strcmp(name, "DW"))
-                {
-                    if(numop != 1)
-                    {
-                        fatal("Pseudo-instruction 'dw' accept only one operand");
-                    }
-
-                    if(op1->type != OP_IMM || !exprisconst(op1->expr))
-                    {
-                        fatal("Pseudo-instruction 'dw' must have a constant as operand");
-                    }
-
-                    line = mkline(LINE_DW, 0, op1, 0, srcl, addr);
-                    addr += 2;
-                }
-                else if(!strcmp(name, "org") || !strcmp(name, "ORG"))
-                {
-                    if(numop != 1)
-                    {
-                        fatal("Pseudo-instruction 'org' accepts only one argument");
-                    }
-
-                    if(op1->type != OP_IMM || !exprisconst(op1->expr))
-                    {
-                        fatal("Pseudo-instruction 'org' must have a constant as argument");
-                    }
-
-                    addr = eval(op1->expr);
-                }
-                else
-                {
-                    if(numop == 0)
-                    {
-                        ins = getins(name, numop, OP_NONE, OP_NONE);
-                    }
-                    else if(numop == 1)
-                    {
-                        ins = getins(name, numop, op1->type, OP_NONE);
+                        lbl->addr = addr;
+                        lbl->status = LBL_RESOLVED;
                     }
                     else
                     {
-                        ins = getins(name, numop, op1->type, op2->type);
+                        addlbl(name, addr, LBL_RESOLVED);
                     }
 
-                    if(!ins)
+                    t = peek();
+                    if(t == T_EOL)
                     {
-                        fatal("Invalid instruction '%s'", name);
+                        expect(T_EOL);
+                    }
+                    line = pline();
+                }
+                else if(t == T_LABEL && (!strcmp(tokenlbl, "equ") || !strcmp(tokenlbl, "EQU")))
+                {
+                    struct Label *lbl;
+                    struct Expr *expr;
+
+                    next();
+                    lbl = getlbl(name);
+                    if(lbl && lbl->status == LBL_RESOLVED)
+                    {
+                        fatal("Label '%s' already defined", name);
+                    }
+                    else if(!lbl)
+                    {
+                        lbl = addlbl(name, 0, LBL_UNSOLVED);
                     }
 
-                    line = mkline(LINE_NRML, ins, op1, op2, srcl, addr);
+                    expr = pexpr();
+                    if(!exprisconst(expr))
+                    {
+                        fatal("Invalid constant expression for directive 'EQU'");
+                    }
 
-                    addr += ins->size;
+                    lbl->addr = eval(expr);
+                    lbl->status = LBL_RESOLVED;
+                    lbl->isconst = 1;
+
+                    expect(T_EOL);
                 }
+                else
+                {
+                    op1 = poperand();
+                    if(op1)
+                    {
+                        ++numop;
+                        if(peek() == T_COMMA)
+                        {
+                            next();
+                            op2 = poperand();
+                            if(op2)
+                            {
+                                ++numop;
+                            }
+                        }
+                    }
 
-                expect(T_EOL);
+                    if(!strcmp(name, "org") || !strcmp(name, "ORG"))
+                    {
+                        if(numop != 1)
+                        {
+                            fatal("Pseudo-instruction 'org' accepts only one argument");
+                        }
+
+                        if(op1->type != OP_IMM || !exprisconst(op1->expr))
+                        {
+                            fatal("Pseudo-instruction 'org' must have a constant as argument");
+                        }
+
+                        addr = eval(op1->expr);
+                    }
+                    else
+                    {
+                        if(numop == 0)
+                        {
+                            ins = getins(name, numop, OP_NONE, OP_NONE);
+                        }
+                        else if(numop == 1)
+                        {
+                            ins = getins(name, numop, op1->type, OP_NONE);
+                        }
+                        else
+                        {
+                            ins = getins(name, numop, op1->type, op2->type);
+                        }
+
+                        if(!ins)
+                        {
+                            fatal("Invalid instruction '%s'", name);
+                        }
+
+                        line = mkline(LINE_NRML, ins, op1, op2, srcl, addr, 0);
+                        addline(line);
+                        addr += ins->size;
+                    }
+
+                    expect(T_EOL);
+                }
             }
         } break;
 
         default:
         {
-            fatal("Invalid token '%d'", t);
+            fatal("Invalid token '%s' (#%d)", tokstr[t], t);
         } break;
     }
 
     return(line);
 }
 
-struct Line *lines;
-struct Line *lastline;
-
 void
 pprogram(void)
 {
-    struct Line *l;
     int t;
-
-    lines = 0;
-    lastline = 0;
 
     t = peek();
     while(t != T_EOF)
     {
-        l = pline();
-        if(l)
-        {
-            if(!lines)
-            {
-                lines = l;
-            }
-            if(lastline)
-            {
-                lastline->next = l;
-            }
-            lastline = l;
-        }
+        pline();
         t = peek();
     }
     expect(T_EOF);
@@ -1507,8 +1531,8 @@ emitw(FILE *f, u16 w)
     emit(f, (u8)((w & 0xff00) >> 8));
 }
 
-#define i8tou8(i)   ((u8)((((i)&0x80))?(256-(i)):(i)))
-#define i16tou16(i) ((u16)((((i)&0x8000))?(65535-(i)):(i)))
+#define i8tou8(i)   ((u8)((((i)&0x80))?((int)(i&0xff)):(i)))
+#define i16tou16(i) ((u16)((((i)&0x8000))?((int)(i&0xffff)):(i)))
 
 void
 emitcode(FILE *fout)
@@ -1524,12 +1548,12 @@ emitcode(FILE *fout)
 
         if(line->type == LINE_DB)
         {
-            i8 val = (i8)eval(line->op1->expr);
+            i8 val = (i8)eval(line->expr);
             emit(fout, i8tou8(val));
         }
         else if(line->type == LINE_DW)
         {
-            i16 val = (i16)eval(line->op1->expr);
+            i16 val = (i16)eval(line->expr);
             emitw(fout, i16tou16(val));
         }
         else if(line->type == LINE_NRML)
@@ -1581,6 +1605,9 @@ emitcode(FILE *fout)
                         fatal("Value %d cannot fit 16 bit", val);
                     }
                     val = val & 0xffff;
+
+                    printf("DEBUG val: %d %d\n", (int)val, (unsigned int)i16tou16(val));
+
                     emitw(fout, i16tou16(val));
                 } break;
 
@@ -1745,6 +1772,13 @@ assemble(char *fnamein, char *fnameout)
     addr = 0;
     /* Parsing + first pass */
     pprogram();
+    for(i = 0;
+        i < lblscount;
+        ++i)
+    {
+        printf("%s: %.4x\n", lbls[i].name, lbls[i].addr);
+    }
+
     /* Second pass (emitting code) */
     emitcode(fout);
     fclose(fout);

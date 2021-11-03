@@ -25,7 +25,7 @@ rawmode(void)
 
 #include "i8080.c"
 
-#define MEM_SIZE 0x1000
+#define MEM_SIZE 0x10000
 u8 mem[MEM_SIZE];
 
 u8
@@ -61,7 +61,7 @@ portout(u8 port, u8 b)
     {
         case 1:
         {
-            putchar(b);
+            write(STDOUT_FILENO, (void *)&b, 1);
         } break;
     }
 }
@@ -81,7 +81,13 @@ portin(u8 port)
 
         case 1:
         {
-            out = 0;
+            char c;
+
+            if(read(STDIN_FILENO, &c, 1) != 1)
+            {
+                c = 0;
+            }
+            out = (u8)c;
         } break;
     }
 
@@ -122,6 +128,9 @@ main(int argc, char *argv[])
     }
     fclose(f);
 
+    cpu.pc = 0x0000;
+    cpu.sp = 0xffff;
+
     cpu.MEM_READ   = &memread;
     cpu.MEM_READ16 = &memread16;
     cpu.MEM_WRITE  = &memwrite;
@@ -129,6 +138,7 @@ main(int argc, char *argv[])
     cpu.IN_PORT    = &portin;
 
     rawmode();
+
     do
     {
 #ifdef I8080_DEBUG_MODE
