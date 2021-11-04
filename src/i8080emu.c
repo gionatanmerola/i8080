@@ -31,7 +31,7 @@ u8 mem[MEM_SIZE];
 u8
 memread(u16 addr)
 {
-    return(mem[addr % MEM_SIZE]);
+    return(mem[(unsigned int)addr % MEM_SIZE]);
 }
 
 u16
@@ -51,17 +51,69 @@ memread16(u16 addr)
 void
 memwrite(u16 addr, u8 val)
 {
-    mem[addr % MEM_SIZE] = val;
+    mem[(unsigned int)addr % MEM_SIZE] = val;
 }
+
+int diskno;
+int trackno;
+int sectorno;
+u8  dmahi;
+u8  dmalo;
+
+#define TRACKS_PER_DSK 77
+#define SECT_PER_TRACK 26
+#define BYTES_PER_SECT 128
 
 void
 portout(u8 port, u8 b)
 {
     switch(port)
     {
+        /* TTY output */
         case 1:
         {
             write(STDOUT_FILENO, (void *)&b, 1);
+        } break;
+
+        /* DISK selection */
+        case 2: { diskno = (int)b; } break;
+        /* TRACK selection */
+        case 3: { trackno = (int)b; } break;
+        /* SECTOR selection */
+        case 4: { sectorno = (int)b; } break;
+
+        /* DMA set low order addres */
+        case 5: { dmalo = b; } break;
+        /* DMA set high order addres */
+        case 6: { dmahi = b; } break;
+
+        /* Write a sector from DMA to disk */
+        case 7:
+        {
+            FILE *fdisk;
+            unsigned int dma;
+            u8 towrite;
+            long int offset;
+            int i;
+
+            fdisk = fopen("a.hdd", "r+");
+
+            dma = (unsigned int)
+                  ((((dmahi&0xff)<<8)&
+                    ((dmalo&0xff)))
+                   & 0xffff);
+            offset = ((sectorno-1)*BYTES_PER_SECT) +
+                     (trackno*SECT_PER_TRACK*BYTES_PER_SECT);
+            fseek(fdisk, offset, SEEK_SET);
+
+            for(i = 0;
+                i < BYTES_PER_SECT;
+                ++i)
+            {
+                towrite = memread(dma+i);
+                fwrite((void *)&towrite, 1, 1, fdisk);
+            }
+            fclose(fdisk);
         } break;
     }
 }
@@ -74,20 +126,57 @@ portin(u8 port)
     out = 0;
     switch(port)
     {
+        /* TTY status */
         case 0:
         {
             out = 0;
+            fseek(stdin, 0, SEEK_END);
+            if(ftell(stdin) > 0)
+            {
+                out = 0xff;
+            }
+            rewind(stdin);
         } break;
 
+        /* TTY input */
         case 1:
         {
             char c;
 
-            if(read(STDIN_FILENO, &c, 1) != 1)
+            if(fread(&c, 1, 1, stdin) != 1)
             {
                 c = 0;
             }
             out = (u8)c;
+        } break;
+
+        /* Read a sector from disk to DMA */
+        case 7:
+        {
+            FILE *fdisk;
+            unsigned int dma;
+            u8 towrite;
+            long int offset;
+            int i;
+
+            fdisk = fopen("a.hdd", "r+");
+
+            dma = (unsigned int)
+                  ((((dmahi&0xff)<<8)&
+                    ((dmalo&0xff)))
+                   & 0xffff);
+            offset = ((sectorno-1)*BYTES_PER_SECT) +
+                     (trackno*SECT_PER_TRACK*BYTES_PER_SECT);
+            fseek(fdisk, offset, SEEK_SET);
+
+            for(i = 0;
+                i < BYTES_PER_SECT;
+                ++i)
+            {
+                fread((void *)&towrite, 1, 1, fdisk);
+                memwrite(dma+i, towrite);
+            }
+            fclose(fdisk);
         } break;
     }
 
@@ -112,7 +201,27 @@ main(int argc, char *argv[])
     u8 b;
     int i;
 
+#ifdef CPM
+    fname = "cpm22.bin";
+    f = fopen(fname, "rb");
+    i = 0x3400;
+    while(fread((void *)&b, 1, 1, f))
+    {
+        mem[i++] = b;
+    }
+    fclose(f);
 
+    fname = "bios.bin";
+    f = fopen(fname, "rb");
+    i = 0x4a00;
+    while(fread((void *)&b, 1, 1, f))
+    {
+        mem[i++] = b;
+    }
+    fclose(f);
+
+    cpu.pc = 0x4a00;
+#else
     if(argc < 2)
     {
         usage(argv[0]);
@@ -127,9 +236,8 @@ main(int argc, char *argv[])
         mem[i++] = b;
     }
     fclose(f);
+#endif
 
-    cpu.pc = 0x0000;
-    cpu.sp = 0xffff;
 
     cpu.MEM_READ   = &memread;
     cpu.MEM_READ16 = &memread16;
@@ -168,7 +276,7 @@ main(int argc, char *argv[])
         printf(" | %s\n", buff);
 
         c = 0;
-        read(STDIN_FILENO, &c, 1);
+        fread(&c, 1, 1, stdin);
         if(c == 0 || c == 'q')
         {
             break;

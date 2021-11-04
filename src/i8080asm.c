@@ -1,8 +1,3 @@
-/**
- * TODO(driverfury):
- * [ ] srcl is not working properly, we need to increment srcl when
- *     we parse not when we get the token.
- */
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -32,7 +27,7 @@ struct Label
     int isconst;
 };
 
-struct Label lbls[200]; /* TODO: More labels? */
+struct Label lbls[2000]; /* TODO: More labels? */
 int lblscount;
 
 struct Label *
@@ -706,6 +701,7 @@ enum
     T_MINUS,
     T_STAR,
     T_SLASH,
+    T_DLRSIGN,
 
     T_COUNT
 };
@@ -726,6 +722,7 @@ char *tokstr[T_COUNT] = {
     "-",
     "*",
     "/",
+    "$",
 };
 
 int token;
@@ -771,7 +768,6 @@ next(void)
 
         case '\n':
         {
-            ++srcl;
             ++src;
             token = T_EOL;
         } break;
@@ -877,6 +873,7 @@ next(void)
         case '-': { token = T_MINUS; ++src; } break;
         case '*': { token = T_STAR;  ++src; } break;
         case '/': { token = T_SLASH; ++src; } break;
+        case '$': { token = T_DLRSIGN; ++src; } break;
 
         default:
         {
@@ -952,6 +949,8 @@ mkexpr(int type, int val, struct Expr *l, struct Expr *r)
     return(e);
 }
 
+unsigned int addr;
+
 struct Expr *pexpr(void);
 
 struct Expr *
@@ -999,6 +998,11 @@ pexprbase(void)
 
             e = mkexpr(EXPR_LBL, 0, 0, 0);
             e->lbl = lbl;
+        } break;
+
+        case T_DLRSIGN:
+        {
+            e = mkexpr(EXPR_CONST, addr, 0, 0);
         } break;
 
         default:
@@ -1152,6 +1156,7 @@ enum
     LINE_NRML,
     LINE_DB,
     LINE_DW,
+    LINE_DS,
 
     LINE_COUNT
 };
@@ -1294,8 +1299,6 @@ poperand(void)
     return(op);
 }
 
-unsigned int addr;
-
 struct Line *
 pline(void)
 {
@@ -1321,6 +1324,7 @@ pline(void)
 
         case T_EOL:
         {
+            ++srcl;
             line = 0;
             next();
         } break;
@@ -1339,10 +1343,6 @@ pline(void)
                 do
                 {
                     expr = pexpr();
-                    if(!exprisconst(expr))
-                    {
-                        fatal("Invalid constant expression for directive 'DB'");
-                    }
                     line = mkline(LINE_DB, 0, 0, 0, srcl, addr, expr);
                     addline(line);
                     addr += 1;
@@ -1361,10 +1361,6 @@ pline(void)
                 do
                 {
                     expr = pexpr();
-                    if(!exprisconst(expr))
-                    {
-                        fatal("Invalid constant expression for directive 'DW'");
-                    }
                     line = mkline(LINE_DW, 0, 0, 0, srcl, addr, expr);
                     addline(line);
                     addr += 2;
@@ -1375,6 +1371,27 @@ pline(void)
                     }
                 }
                 while(t == T_COMMA);
+            }
+            else if(!strcmp(name, "ds") || !strcmp(name, "DS"))
+            {
+                struct Expr *expr;
+                int val;
+
+                expr = pexpr();
+                if(!exprisconst(expr))
+                {
+                    fatal("Invalid constant expression for directive 'DS'");
+                }
+                val = eval(expr);
+                if(val < 0)
+                {
+                    fatal("Invalid expression (cannot be negative) for 'DS'");
+                }
+                line = mkline(LINE_DS, 0, 0, 0, srcl, addr, expr);
+                addline(line);
+                addr += val;
+                expect(T_EOL);
+                ++srcl;
             }
             else
             {
@@ -1399,6 +1416,7 @@ pline(void)
                     if(t == T_EOL)
                     {
                         expect(T_EOL);
+                        ++srcl;
                     }
                     line = pline();
                 }
@@ -1429,6 +1447,7 @@ pline(void)
                     lbl->isconst = 1;
 
                     expect(T_EOL);
+                    ++srcl;
                 }
                 else
                 {
@@ -1487,6 +1506,7 @@ pline(void)
                     }
 
                     expect(T_EOL);
+                    ++srcl;
                 }
             }
         } break;
@@ -1556,6 +1576,19 @@ emitcode(FILE *fout)
             i16 val = (i16)eval(line->expr);
             emitw(fout, i16tou16(val));
         }
+        else if(line->type == LINE_DS)
+        {
+            int i;
+            int times;
+
+            times = eval(line->expr);
+            for(i = 0;
+                i < times;
+                ++i)
+            {
+                emit(fout, 0);
+            }
+        }
         else if(line->type == LINE_NRML)
         {
             assert(ins);
@@ -1605,8 +1638,6 @@ emitcode(FILE *fout)
                         fatal("Value %d cannot fit 16 bit", val);
                     }
                     val = val & 0xffff;
-
-                    printf("DEBUG val: %d %d\n", (int)val, (unsigned int)i16tou16(val));
 
                     emitw(fout, i16tou16(val));
                 } break;
@@ -1753,13 +1784,14 @@ assemble(char *fnamein, char *fnameout)
     fseek(fin, 0, SEEK_END);
     i = ftell(fin);
     fseek(fin, 0, SEEK_SET);
-    _src = (char*)malloc(i+1);
+    _src = (char*)malloc(i+2);
     if(!_src)
     {
         return(3);
     }
     i = fread(_src, 1, i, fin);
-    _src[i] = 0;
+    _src[i] = '\n';
+    _src[i+1] = 0;
     fclose(fin);
 
     fout = fopen(fnameout, "wb");
@@ -1772,12 +1804,14 @@ assemble(char *fnamein, char *fnameout)
     addr = 0;
     /* Parsing + first pass */
     pprogram();
+#ifdef VERBOSE
     for(i = 0;
         i < lblscount;
         ++i)
     {
         printf("%s: %.4x\n", lbls[i].name, lbls[i].addr);
     }
+#endif
 
     /* Second pass (emitting code) */
     emitcode(fout);
