@@ -1,8 +1,3 @@
-/**
- * TODO(driverfury):
- * [ ] For CP/M I disabled signal interrupts (check rawmode())
- *     so we need some key to exit (maybe ESC?)
- */
 #include <unistd.h>
 #include <termios.h>
 #include <stdlib.h>
