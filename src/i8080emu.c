@@ -1,3 +1,8 @@
+/**
+ * TODO(driverfury):
+ * [ ] For CP/M I disabled signal interrupts (check rawmode())
+ *     so we need some key to exit (maybe ESC?)
+ */
 #include <unistd.h>
 #include <termios.h>
 #include <stdlib.h>
@@ -19,7 +24,11 @@ rawmode(void)
     tcgetattr(STDIN_FILENO, &origtermios);
     atexit(exitrawmode);
     raw = origtermios;
+#ifdef CPM
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG);
+#else
     raw.c_lflag &= ~(ECHO | ICANON);
+#endif
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 }
 
@@ -99,8 +108,8 @@ portout(u8 port, u8 b)
             fdisk = fopen("a.hdd", "r+");
 
             dma = (unsigned int)
-                  ((((dmahi&0xff)<<8)&
-                    ((dmalo&0xff)))
+                  (((((unsigned int)dmahi&0xff)<<8) |
+                    ((unsigned int)dmalo&0xff))
                    & 0xffff);
             offset = ((sectorno-1)*BYTES_PER_SECT) +
                      (trackno*SECT_PER_TRACK*BYTES_PER_SECT);
@@ -162,8 +171,8 @@ portin(u8 port)
             fdisk = fopen("a.hdd", "r+");
 
             dma = (unsigned int)
-                  ((((dmahi&0xff)<<8)&
-                    ((dmalo&0xff)))
+                  (((((unsigned int)dmahi&0xff)<<8) |
+                    ((unsigned int)dmalo&0xff))
                    & 0xffff);
             offset = ((sectorno-1)*BYTES_PER_SECT) +
                      (trackno*SECT_PER_TRACK*BYTES_PER_SECT);

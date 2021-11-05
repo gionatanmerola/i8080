@@ -703,6 +703,8 @@ enum
     T_SLASH,
     T_DLRSIGN,
 
+    T_QUOT,
+
     T_COUNT
 };
 
@@ -723,6 +725,7 @@ char *tokstr[T_COUNT] = {
     "*",
     "/",
     "$",
+    "\"",
 };
 
 int token;
@@ -874,6 +877,7 @@ next(void)
         case '*': { token = T_STAR;  ++src; } break;
         case '/': { token = T_SLASH; ++src; } break;
         case '$': { token = T_DLRSIGN; ++src; } break;
+        case '"': { token = T_QUOT; ++src; } break;
 
         default:
         {
@@ -1342,10 +1346,31 @@ pline(void)
 
                 do
                 {
-                    expr = pexpr();
-                    line = mkline(LINE_DB, 0, 0, 0, srcl, addr, expr);
-                    addline(line);
-                    addr += 1;
+                    if(peek() == T_QUOT)
+                    {
+                        next();
+                        if(*src == '"')
+                        {
+                            fatal("Invalid string provided for 'DB' directive");
+                        }
+                        while(*src != '"')
+                        {
+                            /* TODO: Escapes */
+                            expr = mkexpr(EXPR_CONST, (int)*src, 0, 0);
+                            line = mkline(LINE_DB, 0, 0, 0, srcl, addr, expr);
+                            addline(line);
+                            addr += 1;
+                            ++src;
+                        }
+                        ++src;
+                    }
+                    else
+                    {
+                        expr = pexpr();
+                        line = mkline(LINE_DB, 0, 0, 0, srcl, addr, expr);
+                        addline(line);
+                        addr += 1;
+                    }
                     t = peek();
                     if(t == T_COMMA)
                     {

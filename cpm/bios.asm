@@ -67,13 +67,22 @@ DPBASE: DW      TRANS,  0x0000
         DW      CHK03,  ALL03
 
 ; Sector translate vector
-TRANS:  DB       1,  7, 13, 19  ; sectors  1,  2,  3,  4
-        DB      25,  5, 11, 17  ; sectors  5,  6,  7,  8
-        DB      23,  3,  9, 15  ; sectors  9, 10, 11, 12
-        DB      21,  2,  8, 14  ; sectors 13, 14, 15, 16
-        DB      20, 26,  6, 12  ; sectors 17, 18, 19, 20
-        DB      18, 24,  4, 10  ; sectors 21, 22, 23, 24
-        DB      16, 22          ; sectors 25, 16
+; NOTE(driverfury): We don't need a sector skew table since
+; we are just emulating
+;TRANS:  DB       1,  7, 13, 19  ; sectors  1,  2,  3,  4
+;        DB      25,  5, 11, 17  ; sectors  5,  6,  7,  8
+;        DB      23,  3,  9, 15  ; sectors  9, 10, 11, 12
+;        DB      21,  2,  8, 14  ; sectors 13, 14, 15, 16
+;        DB      20, 26,  6, 12  ; sectors 17, 18, 19, 20
+;        DB      18, 24,  4, 10  ; sectors 21, 22, 23, 24
+;        DB      16, 22          ; sectors 25, 26
+TRANS:  DB       1,  2,  3,  4
+        DB       5,  6,  7,  8
+        DB       9, 10, 11, 12
+        DB      13, 14, 15, 16
+        DB      17, 18, 19, 20
+        DB      21, 22, 23, 24
+        DB      25, 26
 
 ; Disk parameter block (common to all disks)
 DPBLK:  DW      26              ; sectors per track
@@ -180,6 +189,8 @@ CONST:  IN      0
 
 ; Get console input character in register A
 CONIN:  IN      1
+        CPI     27
+        JZ      EXIT
         RET
 
 ; Output the character in C to the console
@@ -265,11 +276,11 @@ SETDMA: MOV     L,C
         RET
 
 ; Perform read operation
-READ:   OUT     7
+READ:   IN      7
         JMP     WAITIO
 
 ; Perform write operation
-WRITE:  IN      7
+WRITE:  OUT     7
         JMP     WAITIO
 
 WAITIO: MVI     A,0         ; 0 = no error
@@ -298,3 +309,5 @@ CHK03:  DS      16          ; Check vector 3
 
 ENDDAT  EQU     $           ; End of data area
 DASIZ   EQU     $-BEGDAT    ; Size of data area
+
+EXIT:   HLT

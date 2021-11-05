@@ -6,8 +6,8 @@ We'll probably also make a toolchain for this emulator (OS, assembler, compilers
 
 - [x] Assembler
 - [x] Emulator
-- [ ] BIOS
-- [ ] OS (CP/M, ...)
+- [x] BIOS
+- [x] OS (CP/M, ...)
 
 ## Assembler
 
