@@ -6,8 +6,9 @@ We'll probably also make a toolchain for this emulator (OS, assembler, compilers
 
 - [x] Assembler
 - [x] Emulator
+- [x] Bootloader
 - [x] BIOS
-- [x] OS (CP/M, ...)
+- [x] OS (CP/M)
 
 ## Assembler
 
@@ -37,18 +38,42 @@ The you can run a binary file.
 ```
 ### CP/M
 
+[CP/M](https://en.wikipedia.org/wiki/CP/M) is a minimalistic disk operating system born
+in the 70s.
+
+You can compile the CP/M emulator with the following command:
+
 ```bash
 gcc -o cpm/cpm22 src/i8080emu.c -ansi -pedantic -Wall -Werror -DCPM
 ```
+And run it:
 
-For now, our BIOS only operates on 1 disk which is the file ```a.hdd```.
+```bash
+./cpm22
+```
+
+You can even compile in debug mode:
+```bash
+gcc -o cpm/cpm22d src/i8080emu.c -ansi -pedantic -Wall -Werror -DI8080_DEBUG_MODE -DCPM
+```
+
+For now, our emulator only operates on 1 disk which is the file ```a.hdd```.
 
 So you need to create a CP/M raw image on a.hdd (mind the sector skew table, you can
 enable or disable it in the file ```bios.asm```).
 
+The first sector (128 bytes) of the disk is the bootloader, it is automatically loaded
+into memory and it is executed.
+
+You can find a default bootloader (```cpm/bootloader.asm```) for CP/M which loads the first
+2 tracks into memory and jumps to CP/M entry point.
+
+The BIOS and the bootloader are platform dependent (hardware-dependent), while CP/M is
+not because it has the BDOS which is an interface between the BIOS and CP/M.
+
 ## BIOS
 
-We need to make our own BIOS so we can run an OS.
+We need a BIOS to run an OS.
 
 Our BIOS is pretty simple, it has the following table at the start (it is compatible with CP/M):
 
@@ -73,3 +98,4 @@ Our BIOS is pretty simple, it has the following table at the start (it is compat
 ```
 
 So you can call address ```BIOS+9``` for CONIN, ```BIOS+12``` for CONOUT and so on...
+

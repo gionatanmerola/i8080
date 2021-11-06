@@ -8,4 +8,5 @@ BDOS    EQU     0x0005
 
         RET
 
-MSG:    DB      "Hello World!!!!$",0
+MSG:    DB      "Hello Worldx!!!$",0
+CLRSQ:  DB      0x1b,'[','2','J','$',0

@@ -20,7 +20,13 @@ rawmode(void)
     atexit(exitrawmode);
     raw = origtermios;
 #ifdef CPM
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG);
+    /* NOTE(driverfury): while debugging we get stuck many times
+     * into the program and we cannot close it since signals
+     * are disabled, so we need to enable them at least
+     * while debugging
+     */
+    /*raw.c_lflag &= ~(ECHO | ICANON | ISIG);*/
+    raw.c_lflag &= ~(ECHO | ICANON);
 #else
     raw.c_lflag &= ~(ECHO | ICANON);
 #endif
@@ -206,6 +212,24 @@ main(int argc, char *argv[])
     int i;
 
 #ifdef CPM
+    /* Load the first sector of the disk into memory */
+    fname = "a.hdd";
+    f = fopen(fname, "rb");
+    i = 0x0000;
+    for(i = 0;
+        i < 128;
+        ++i)
+    {
+        if(!fread((void *)&b, 1, 1, f))
+        {
+            break;
+        }
+        mem[i] = b;
+    }
+    fclose(f);
+    cpu.pc = 0x0000;
+
+#if 0
     fname = "cpm22.bin";
     f = fopen(fname, "rb");
     i = 0x3400;
@@ -225,6 +249,7 @@ main(int argc, char *argv[])
     fclose(f);
 
     cpu.pc = 0x4a00;
+#endif
 #else
     if(argc < 2)
     {
