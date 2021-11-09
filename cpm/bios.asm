@@ -25,7 +25,7 @@ WBOOTE: JMP     WBOOT           ; warm start
         JMP     CONIN           ; console char in
         JMP     CONOUT          ; console char out
         JMP     LIST            ; list char out
-        JMP     PUNCH           ; punch char our
+        JMP     PUNCH           ; punch char out
         JMP     READER          ; reader char out
         JMP     HOME            ; move head to home pos
         JMP     SELDSK          ; select disk

@@ -31,7 +31,7 @@ How to compile the emulator:
 gcc -o i8080emu src/i8080emu.c -ansi -pedantic
 ```
 
-The you can run a binary file.
+Then you can run a binary file.
 
 ```bash
 ./i8080emu hello.bin
@@ -84,7 +84,7 @@ Our BIOS is pretty simple, it has the following table at the start (it is compat
     JMP     CONIN           ; console char in
     JMP     CONOUT          ; console char out
     JMP     LIST            ; list char out
-    JMP     PUNCH           ; punch char our
+    JMP     PUNCH           ; punch char out
     JMP     READER          ; reader char out
     JMP     HOME            ; move head to home pos
     JMP     SELDSK          ; select disk
