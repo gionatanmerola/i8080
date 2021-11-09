@@ -4,20 +4,38 @@
  * that uses less memory) which can compile itself.
  *
  * Types:
- * - char (1 byte)
- * - int  (2 bytes)
- * - pointer (only one level)
- *
- * Expressions:
- * - integer literal [0-9]+
- * - add, sub, mul, div, bit-and, bit-or
+ * [ ] char (1 byte)
+ * [ ] int  (2 bytes)
+ * [ ] pointer (only one level)
  *
  * No struct, no unions. Just char, ints, pointers, enums.
+ * [ ] enum
  *
  * Control structures:
- * - if-else
- * - while
+ * [x] if-else
+ * [x] while
  *
+ * Calling convention:
+ * When a function is called, first of all arguments are passed on
+ * the stack in their respective order and then the function is called.
+ *   - push(arg1)
+ *   - push(arg2)
+ *   - ...
+ *   - call func  <- HL points here
+ * The HL register will point to the address where return address is stored
+ * throughout the whole function. It's like an BP register.
+ *
+ * Local variables are
+ *
+ */
+
+/**
+ * TODO(driverfury):
+ *
+ * [ ] We must subtract from HL (which is our BP) not add.
+ * [ ] What about an identifier 'A' or 'B', it can be confused
+ *     with registers of i8080. Put a '$' or '#' at the start
+ *     of an immediate value??
  */
 
 #include <stdio.h>
@@ -38,17 +56,31 @@ int pb;
 int lblcount;           /* counter for unique lbl generation */
 
 /**
- * Symbol table: every record is a char (which indicates the type)
- * followed by a null-terminated string (identifier).
- * The type can assume the following values:
- *   0 => invalid
- *   1 => var
- *   2 => function
+ * NOTE(driverfury): Symbol table
+ * Every record is organized like so:
+ * 1. a char which indicates if it's a function or a variable
+ * 2. a char which indicates the offset from EBP where the local var is
+ * 3. a char which indicates the type
+ * 4. the number of params
+ * 5. a null-terminated string (identifier).
  *
- * symp is offset from sym symtbl to the next empty table entry
+ * The 1st char can assume the following values:
+ *    0  => invalid
+ *   'g' => global variable
+ *   'f' => function (indeed global)
+ *   'l' => local variable
+ *
+ * The 3rd char can assume the following value:
+ *   0   => invalid
+ *  'c'  => char
+ *  'i'  => int
+ *
+ * symp is offset from symtbl to the next empty table entry
  */
 char symtbl[0x1000];
 int symp;
+
+int foff;               /* offset for the next local variable */
 
 void
 fatal(char *s)
@@ -114,12 +146,17 @@ mcpy(char *src, char *dst, int len)
 }
 
 char *
-addsym(char *id, char type)
+addsym(
+    char *id, char forv, char offset,
+    char type, char numparams)
 {
     char *res;
 
     res = symtbl + symp;
+    symtbl[symp++] = forv;
+    symtbl[symp++] = offset;
     symtbl[symp++] = type;
+    symtbl[symp++] = numparams;
     while(*id)
     {
         symtbl[symp++] = *id;
@@ -130,23 +167,29 @@ addsym(char *id, char type)
     return(res);
 }
 
-char
-getsym(char *id)
+char *
+getsym(char *symid)
 {
+    char *sym;
     int i;
 
+    sym = 0;
     i = 0;
     while(i < symp)
     {
-        if(streq(id, &symtbl[symp]))
+        i += 4;
+        if(streq(symid, &symtbl[i]))
         {
-            i += strl(&symtbl[symp]) + 1;
-            return(symtbl[i]);
+            /**
+             * NOTE(driverfury): We don't break the loop since
+             * we need to get the last occurrence of that symbol
+             */
+            sym = &symtbl[i - 4];
         }
-        i += strl(&symtbl[symp]) + 2;
+        i += strl(&symtbl[i]) + 1;
     }
 
-    return(0);
+    return(sym);
 }
 
 enum
@@ -442,16 +485,40 @@ exprbase()
     }
     else if(tk == T_ID)
     {
+        char *sym;
 
-        /* TODO: Check symbol */
-        emit("\tLXI H,");
-        emit(id);
-        emit("\n");
-        emit("\tLDAX H\n");
-        emit("\tMOV C,A\n");
-        emit("\tINX H\n");
-        emit("\tLDAX H\n");
-        emit("\tMOV B,A\n");
+        sym = getsym(id);
+        if(!sym)
+        {
+            fatal("Undefined symbol exprbase");
+        }
+        if(sym[0] != 'g' && sym[0] != 'l')
+        {
+            fatal("Symbol is not a variable");
+        }
+
+        emit("\tPUSH H\n");
+        if(sym[0] == 'g')
+        {
+            emit("\tLHLD ");
+            emit(id);
+            emit("\n");
+        }
+        else
+        {
+            /* TODO: We must subtract the offset, not add */
+            emit("\tLXI D,");
+            emitint(sym[1]);
+            emit("\n");
+            emit("\tDAD D\n");
+            emit("\tMOV E,M\n");
+            emit("\tINX H\n");
+            emit("\tMOV D,M\n");
+            emit("\tXCHG\n");
+        }
+        emit("\tMOV B,H\n");
+        emit("\tMOV C,L\n");
+        emit("\tPOP H\n");
         emit("\tPUSH B\n");
 
         next();
@@ -567,15 +634,17 @@ exprassign()
 
     if(tk == T_ID)
     {
-        /* TODO: Check symbol and type */
-        /*
-        type = getsym(id);
-        if(!type)
+        char *sym;
+
+        sym = getsym(id);
+        if(!sym)
         {
-            printf("Invalid symbol\n");
-            assert(0);
+            fatal("Undefined symbol in exprassign");
         }
-        */
+        if(sym[0] != 'g' && sym[0] != 'l')
+        {
+            fatal("Symbol is not a variable");
+        }
 
         oldtk = tk;
         oldtkval = tkval;
@@ -585,15 +654,28 @@ exprassign()
         {
             next();
             expr();
-            emit("\tLXI H,");
-            emit(oldid);
-            emit("\n");
             emit("\tPOP B\n");
+            emit("\tPUSH H\n");
+            if(sym[0] == 'g')
+            {
+                emit("\tLXI H,");
+                emit(oldid);
+                emit("\n");
+            }
+            else
+            {
+                /* TODO: We must subtract the offset, not add */
+                emit("\tLXI D,");
+                emitint(sym[1]);
+                emit("\n");
+                emit("\tDAD D\n");
+            }
             emit("\tMOV A,C\n");
             emit("\tSTAX H\n");
             emit("\tINX H\n");
             emit("\tMOV A,B\n");
             emit("\tSTAX H\n");
+            emit("\tPOP H\n");
             emit("\tPUSH B\n");
         }
         else
@@ -621,6 +703,7 @@ expr()
  * NOTE(driverfury): Statements syntax
  *
  * stmt ::= stmtblk
+ *        | (T_CHAR | T_INT) T_ID ';'
  *        | T_IF '(' expr ')' stmt [T_ELSE stmt]?
  *        | T_WHILE '(' expr ')' stmt
  *        | expr ';'
@@ -636,6 +719,22 @@ stmt()
     if(tk == T_LBRACE)
     {
         stmtblk();
+    }
+    else if(tk == T_INT || tk == T_CHAR)
+    {
+        char type;
+        char size;
+
+             if(tk == T_INT)  { type = 'i'; size = 2; }
+        else if(tk == T_CHAR) { type = 'c'; size = 2; }
+
+        expect(T_ID);
+
+        addsym(id, 'l', foff, type, 0);
+        foff += size;
+
+        expect(T_SEMI);
+        next();
     }
     else if(tk == T_IF)
     {
@@ -773,6 +872,14 @@ stmtblk()
 void
 prog()
 {
+    char forv;
+    char type;
+    char numparams;
+
+    forv = 0;
+    type = 0;
+    numparams = 0;
+
     emit("\tORG 0x100\n\n");
     emit("\tJMP main\n\n");
     next();
@@ -780,18 +887,28 @@ prog()
     {
         if(tk == T_INT || tk == T_CHAR)
         {
+            char symid[32];
+
+                 if(tk == T_INT)  { type = 'i'; }
+            else if(tk == T_CHAR) { type = 'c'; }
+
             expect(T_ID);
+            mcpy(id, symid, 32);
             emit(id);
             emit(":\n");
             next();
             if(tk == T_LPAREN)
             {
+                forv = 'f';
+                /* TODO(driverfury): parse params */
                 expect(T_RPAREN);
                 next();
+                foff = 2;
                 stmtblk();
             }
             else
             {
+                forv = 'g';
                 emit("\tDW 0\n");
                 if(tk != T_SEMI)
                 {
@@ -799,6 +916,8 @@ prog()
                 }
                 next();
             }
+
+            addsym(symid, forv, 0, type, numparams);
         }
         else
         {
