@@ -21,7 +21,9 @@
  *   - push(arg1)
  *   - push(arg2)
  *   - ...
+ *   - return val
  *   - call func  <- HL points here
+ *   - last BP
  * The HL register will point to the address where return address is stored
  * throughout the whole function. It's like an BP register.
  *
@@ -32,7 +34,6 @@
 /**
  * TODO(driverfury):
  *
- * [ ] We must subtract from HL (which is our BP) not add.
  * [ ] What about an identifier 'A' or 'B', it can be confused
  *     with registers of i8080. Put a '$' or '#' at the start
  *     of an immediate value??
@@ -44,6 +45,7 @@
 FILE *fin;              /* input file handle */
 FILE *fout;             /* output file handle */
 
+int line;               /* current line number */
 int tk;                 /* current token */
 int tkval;              /* token value */
 char id[32];            /* max id len: 31 (last char in null) */
@@ -85,9 +87,16 @@ int foff;               /* offset for the next local variable */
 void
 fatal(char *s)
 {
+    printf("LINE %d: ", line);
     printf(s);
     printf("\n");
     assert(0);
+}
+
+void
+dbgtk(char *l)
+{
+    printf("%s: %d %d %s\n", l, tk, tkval, id);
 }
 
 int
@@ -207,19 +216,22 @@ enum
 
     T_SEMI,       /*  9 */
     T_COLON,      /* 10 */
+    T_COMMA,      /* 11 */
+    T_DOT,        /* 12 */
 
-    T_PLUS,       /* 11 */
-    T_MINUS,      /* 12 */
-    T_STAR,       /* 13 */
-    T_SLASH,      /* 14 */
+    T_PLUS,       /* 13 */
+    T_MINUS,      /* 14 */
+    T_STAR,       /* 15 */
+    T_SLASH,      /* 16 */
 
-    T_EQ,         /* 15 */
+    T_EQ,         /* 17 */
 
-    T_INT,        /* 16 */
-    T_CHAR,       /* 17 */
-    T_IF,         /* 18 */
-    T_ELSE,       /* 19 */
-    T_WHILE,      /* 20 */
+    T_INT,        /* 18 */
+    T_CHAR,       /* 19 */
+    T_IF,         /* 20 */
+    T_ELSE,       /* 21 */
+    T_WHILE,      /* 22 */
+    T_RETURN,     /* 23 */
 
     T_COUNT
 };
@@ -345,6 +357,10 @@ next()
         while(c ==  ' ' || c == '\t' || c == '\v' ||
               c == '\r' || c == '\f' || c == '\n')
         {
+            if(c == '\n')
+            {
+                ++line;
+            }
             c = fgetc(fin);
         }
 
@@ -372,11 +388,12 @@ next()
             }
             ungetc(c, fin);
 
-                 if(streq(id, "int"))   { tk = T_INT; }
-            else if(streq(id, "char"))  { tk = T_CHAR; }
-            else if(streq(id, "if"))    { tk = T_IF; }
-            else if(streq(id, "else"))  { tk = T_ELSE; }
-            else if(streq(id, "while")) { tk = T_WHILE; }
+                 if(streq(id, "int"))    { tk = T_INT; }
+            else if(streq(id, "char"))   { tk = T_CHAR; }
+            else if(streq(id, "if"))     { tk = T_IF; }
+            else if(streq(id, "else"))   { tk = T_ELSE; }
+            else if(streq(id, "while"))  { tk = T_WHILE; }
+            else if(streq(id, "return")) { tk = T_RETURN; }
         }
         else if(c >= '0' && c <= '9')
         {
@@ -392,6 +409,8 @@ next()
         }
         else if(c == ';') { tk = T_SEMI; }
         else if(c == ':') { tk = T_COLON; }
+        else if(c == ',') { tk = T_COMMA; }
+        else if(c == '.') { tk = T_DOT; }
         else if(c == '(') { tk = T_LPAREN; }
         else if(c == ')') { tk = T_RPAREN; }
         else if(c == '{') { tk = T_LBRACE; }
@@ -453,11 +472,14 @@ prec(int t)
  *
  * exprbase ::= T_INTLIT
  *            | T_ID
+ *            | T_ID '(' params? ')'
  *            | '(' expr ')'
  *
- * exprun ::= exprbase
- *          | '+' exprbase
- *          | '-' exprbase
+ * exprpost ::= exprbase
+ *
+ * exprun ::= exprpost
+ *          | '+' exprpost
+ *          | '-' exprpost
  *
  * exprbin ::= exprun
  *           | exprun '*' exprun
@@ -486,42 +508,97 @@ exprbase()
     else if(tk == T_ID)
     {
         char *sym;
+        char symid[32];
+        int i;
+        int nparams;
 
-        sym = getsym(id);
+        mcpy(id, symid, 32);
+        sym = getsym(symid);
         if(!sym)
         {
             fatal("Undefined symbol exprbase");
         }
-        if(sym[0] != 'g' && sym[0] != 'l')
+        if(sym[0] != 'g' && sym[0] != 'l' && sym[0] != 'f')
         {
-            fatal("Symbol is not a variable");
+            fatal("Invalid symbol");
         }
 
-        emit("\tPUSH H\n");
-        if(sym[0] == 'g')
+        next();
+        if(tk == T_LPAREN)
         {
-            emit("\tLHLD ");
-            emit(id);
+            next();
+            if(sym[0] != 'f')
+            {
+                fatal("You can only call functions");
+            }
+
+            /* TODO(driverfury): reserve space for function params */
+
+            if(tk != T_RPAREN)
+            {
+                i = 0;
+                nparams = 0;
+                do
+                {
+                    expr();
+                    ++nparams;
+                    if(tk == T_COMMA)
+                    {
+                        next();
+                    }
+                    else
+                    {
+                        i = 1;
+                    }
+                }
+                while(!i);
+            }
+            next();
+
+            /* Reserve space for return value */
+            emit("\tPUSH H ;return value\n");
+            emit("\tCALL ");
+            emit(symid);
             emit("\n");
+
+            emit("\tPOP B\n"); /* Return value */
+            for(i = 0;
+                i < nparams;
+                ++i)
+            {
+                emit("\tPOP D\n"); /* Pop params */
+            }
+
+            /* NOTE(driverfury): From now on there's the result of the
+             * function call on to the stack
+             */
+            emit("\tPUSH B\n"); /* Return value */
         }
         else
         {
-            /* TODO: We must subtract the offset, not add */
-            emit("\tLXI D,");
-            emitint(sym[1]);
-            emit("\n");
-            emit("\tDAD D\n");
-            emit("\tMOV E,M\n");
-            emit("\tINX H\n");
-            emit("\tMOV D,M\n");
-            emit("\tXCHG\n");
+            emit("\tPUSH H\n");
+            if(sym[0] == 'g')
+            {
+                emit("\tLHLD ");
+                emit(symid);
+                emit("\n");
+            }
+            else
+            {
+                emit("\tLXI D,");
+                emitint(sym[1]);
+                emit("\n");
+                emit("\tDAD D\n");
+                emit("\tMOV E,M\n");
+                emit("\tINX H\n");
+                emit("\tMOV D,M\n");
+                emit("\tXCHG\n");
+            }
+            emit("\tMOV B,H\n");
+            emit("\tMOV C,L\n");
+            emit("\tPOP H\n");
+            emit("\tPUSH B\n");
         }
-        emit("\tMOV B,H\n");
-        emit("\tMOV C,L\n");
-        emit("\tPOP H\n");
-        emit("\tPUSH B\n");
-
-        next();
     }
     else if(tk == T_LPAREN)
     {
@@ -535,8 +612,16 @@ exprbase()
     }
     else
     {
+        printf("tk: %d %d %s\n", tk, tkval, id);
         fatal("Invalid base expression");
     }
+}
+
+void
+exprpost()
+{
+    /* TODO */
+    exprbase();
 }
 
 void
@@ -545,7 +630,7 @@ exprun()
     if(tk == T_MINUS)
     {
         next();
-        exprbase();
+        exprpost();
         emit("\tPOP B\n");
         emit("\tXRA A\n");
         emit("\tSUB C\n");
@@ -558,11 +643,11 @@ exprun()
     else if(tk == T_PLUS)
     {
         next();
-        exprbase();
+        exprpost();
     }
     else
     {
-        exprbase();
+        exprpost();
     }
 }
 
@@ -643,48 +728,50 @@ exprassign()
         }
         if(sym[0] != 'g' && sym[0] != 'l')
         {
-            fatal("Symbol is not a variable");
-        }
-
-        oldtk = tk;
-        oldtkval = tkval;
-        mcpy(id, oldid, 32);
-
-        if(next() == T_EQ)
-        {
-            next();
-            expr();
-            emit("\tPOP B\n");
-            emit("\tPUSH H\n");
-            if(sym[0] == 'g')
-            {
-                emit("\tLXI H,");
-                emit(oldid);
-                emit("\n");
-            }
-            else
-            {
-                /* TODO: We must subtract the offset, not add */
-                emit("\tLXI D,");
-                emitint(sym[1]);
-                emit("\n");
-                emit("\tDAD D\n");
-            }
-            emit("\tMOV A,C\n");
-            emit("\tSTAX H\n");
-            emit("\tINX H\n");
-            emit("\tMOV A,B\n");
-            emit("\tSTAX H\n");
-            emit("\tPOP H\n");
-            emit("\tPUSH B\n");
+            exprbin(0);
         }
         else
         {
-            putback();
-            tk = oldtk;
-            tkval = oldtkval;
-            mcpy(oldid, id, 32);
-            exprbin(0);
+            oldtk = tk;
+            oldtkval = tkval;
+            mcpy(id, oldid, 32);
+
+            if(next() == T_EQ)
+            {
+                next();
+                expr();
+                emit("\tPOP B\n");
+                emit("\tPUSH H\n");
+                if(sym[0] == 'g')
+                {
+                    emit("\tLXI H,");
+                    emit(oldid);
+                    emit("\n");
+                }
+                else
+                {
+                    emit("\tLXI D,");
+                    emitint(sym[1]);
+                    emit("\n");
+                    emit("\tDAD D\n");
+                }
+                emit("\tMOV A,C\n");
+                emit("\tXCHG\n");
+                emit("\tSTAX D\n");
+                emit("\tINX D\n");
+                emit("\tMOV A,B\n");
+                emit("\tSTAX D\n");
+                emit("\tPOP H\n");
+                emit("\tPUSH B\n");
+            }
+            else
+            {
+                putback();
+                tk = oldtk;
+                tkval = oldtkval;
+                mcpy(oldid, id, 32);
+                exprbin(0);
+            }
         }
     }
     else
@@ -706,6 +793,7 @@ expr()
  *        | (T_CHAR | T_INT) T_ID ';'
  *        | T_IF '(' expr ')' stmt [T_ELSE stmt]?
  *        | T_WHILE '(' expr ')' stmt
+ *        | T_RETURN expr? ';'
  *        | expr ';'
  *
  * stmtblk ::= '{' [stmt]* '}
@@ -734,6 +822,33 @@ stmt()
         foff += size;
 
         expect(T_SEMI);
+        next();
+    }
+    else if(tk == T_RETURN)
+    {
+        if(next() != T_SEMI)
+        {
+            expr();
+            /* NOTE(driverfury): Put expression inside return value */
+            emit("\tPOP B\n");
+            emit("\tPUSH H\n");
+            emit("\tINX H\n");
+            emit("\tINX H\n");
+            emit("\tXCHG\n");
+            emit("\tMOV A,C\n");
+            emit("\tSTAX D\n");
+            emit("\tINX D\n");
+            emit("\tMOV A,B\n");
+            emit("\tSTAX D\n");
+            emit("\tPOP H\n");
+        }
+        if(tk != T_SEMI)
+        {
+            fatal("Missing semi-colon ';' at the end of return statement");
+        }
+        emit("\tPOP H ;restore BP\n");
+        emit("\tRET\n");
+
         next();
     }
     else if(tk == T_IF)
@@ -870,18 +985,60 @@ stmtblk()
 }
 
 void
+funcpre()
+{
+    emit("\t;function preamble\n");
+    emit("\tPUSH H ;save current BP\n");
+    emit("\tLXI H,0\n");
+    emit("\tDAD SP\n");
+    emit("\tINX H\n");
+    emit("\tINX H\n");
+}
+
+void
 prog()
 {
     char forv;
     char type;
     char numparams;
 
+    line = 1;
+
     forv = 0;
     type = 0;
     numparams = 0;
 
     emit("\tORG 0x100\n\n");
-    emit("\tJMP main\n\n");
+    emit("\tPUSH H ;return value\n");
+    emit("\tCALL main\n");
+    emit("\tPOP H\n");
+    emit("\tMVI C,0\n");
+    emit("\tCALL 5\n");
+    emit("\tRET\n\n");
+    emit("\tHLT\n\n");
+
+    /* Small C library for CP/M 2.2 on i8080 */
+
+    /* putchar(int) */
+    emit("putchar:\n");
+    funcpre();
+    emit("\tPUSH D\n");
+    emit("\tPUSH B\n");
+    emit("\tINX H\n");
+    emit("\tINX H\n");
+    emit("\tINX H\n");
+    emit("\tINX H\n");
+    emit("\tXCHG\n");
+    emit("\tLDAX D\n");
+    emit("\tMOV E,A\n");
+    emit("\tMVI C,2\n");
+    emit("\tCALL 5\n");
+    emit("\tPOP B\n");
+    emit("\tPOP D\n");
+    emit("\tPOP H\n");
+    emit("\tRET\n");
+    addsym("putchar", 'f', 0, 'i', 1);
+
     next();
     while(tk != T_EOF)
     {
@@ -902,9 +1059,26 @@ prog()
                 forv = 'f';
                 /* TODO(driverfury): parse params */
                 expect(T_RPAREN);
-                next();
-                foff = 2;
-                stmtblk();
+
+                /**
+                 * TODO(driverfury): Wrong!! The offset for
+                 * a param is 4+(nparms-index-1)
+                 * where nparams is the number of params
+                 * and index is the position of the current
+                 * params (starting from 0).
+                 */
+                foff = 4;
+
+                if(peek() == T_LBRACE)
+                {
+                    next();
+                    funcpre();
+                    stmtblk();
+                }
+                else
+                {
+                    fatal("We do not support functions prototypes yet");
+                }
             }
             else
             {
