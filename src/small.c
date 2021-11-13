@@ -3,12 +3,11 @@
  * The goal is to make a small compiler (small in size and
  * that uses less memory) which can compile itself.
  *
- * Types:
- * [ ] char (1 byte)
- * [ ] int  (2 bytes)
- * [ ] pointer (only one level)
- *
  * No struct, no unions. Just char, ints, pointers, enums.
+ * Types:
+ * [x] char (1 byte)
+ * [x] int  (2 bytes)
+ * [ ] pointer (only one level)
  * [ ] enum
  *
  * Control structures:
@@ -16,18 +15,21 @@
  * [x] while
  *
  * Calling convention:
- * When a function is called, first of all arguments are passed on
+ * When a function is called, all arguments are passed on
  * the stack in their respective order and then the function is called.
- *   - push(arg1)
- *   - push(arg2)
+ *   - arg 1
+ *   - arg 2
  *   - ...
+ *   - arg n
  *   - return val
  *   - call func  <- HL points here
  *   - last BP
+ *   - local var 1
+ *   - local var 2
+ *   - ...
+ *   - local var m
  * The HL register will point to the address where return address is stored
- * throughout the whole function. It's like an BP register.
- *
- * Local variables are
+ * throughout the whole function. It's like a BP register.
  *
  */
 
@@ -55,13 +57,15 @@ int pbtkval;
 char pbid[32];
 int pb;
 
-int lblcount;           /* counter for unique lbl generation */
+char buff[128];         /* General purpose buffer */
+
+int lblcount;           /* counter for unique label generation */
 
 /**
  * NOTE(driverfury): Symbol table
  * Every record is organized like so:
  * 1. a char which indicates if it's a function or a variable
- * 2. a char which indicates the offset from EBP where the local var is
+ * 2. a char which indicates the offset from BP where the local var is
  * 3. a char which indicates the type
  * 4. the number of params
  * 5. a null-terminated string (identifier).
@@ -71,6 +75,7 @@ int lblcount;           /* counter for unique lbl generation */
  *   'g' => global variable
  *   'f' => function (indeed global)
  *   'l' => local variable
+ *   'p' => function param
  *
  * The 3rd char can assume the following value:
  *   0   => invalid
@@ -440,6 +445,26 @@ peek()
     return(t);
 }
 
+/* Look n characters ahead */
+void
+look(char *bf, int n, int mul)
+{
+    int ipos;
+    int i;
+
+    ipos = ftell(fin);
+
+    fseek(fin, ipos - 1 + mul*n, SEEK_SET);
+    for(i = 0;
+        i < n;
+        ++i)
+    {
+        bf[i] = fgetc(fin);
+    }
+
+    fseek(fin, ipos, SEEK_SET);
+}
+
 void
 expect(int t)
 {
@@ -497,6 +522,11 @@ void expr();
 void
 exprbase()
 {
+    char *sym;
+    char symid[32];
+    int i;
+    int nparams;
+
     if(tk == T_INTLIT)
     {
         emit("\tLXI B,");
@@ -507,11 +537,6 @@ exprbase()
     }
     else if(tk == T_ID)
     {
-        char *sym;
-        char symid[32];
-        int i;
-        int nparams;
-
         mcpy(id, symid, 32);
         sym = getsym(symid);
         if(!sym)
@@ -532,8 +557,7 @@ exprbase()
                 fatal("You can only call functions");
             }
 
-            /* TODO(driverfury): reserve space for function params */
-
+            /* reserve space for function params */
             if(tk != T_RPAREN)
             {
                 i = 0;
@@ -583,7 +607,7 @@ exprbase()
                 emit(symid);
                 emit("\n");
             }
-            else
+            else if(sym[0] == 'p')
             {
                 emit("\tLXI D,");
                 emitint(sym[1]);
@@ -593,6 +617,23 @@ exprbase()
                 emit("\tINX H\n");
                 emit("\tMOV D,M\n");
                 emit("\tXCHG\n");
+            }
+            else if(sym[0] == 'l')
+            {
+                emit("\tMVI B,");
+                emitint(sym[1]);
+                emit("\n");
+                emit("\tMOV A,L\n");
+                emit("\tSUB B\n");
+                emit("\tMOV L,A\n");
+                emit("\tMOV E,M\n");
+                emit("\tINX H\n");
+                emit("\tMOV D,M\n");
+                emit("\tXCHG\n");
+            }
+            else
+            {
+                fatal("Invalid variable");
             }
             emit("\tMOV B,H\n");
             emit("\tMOV C,L\n");
@@ -716,17 +757,16 @@ exprassign()
     int oldtk;
     int oldtkval;
     char oldid[32];
+    char *sym;
 
     if(tk == T_ID)
     {
-        char *sym;
-
         sym = getsym(id);
         if(!sym)
         {
             fatal("Undefined symbol in exprassign");
         }
-        if(sym[0] != 'g' && sym[0] != 'l')
+        if(sym[0] != 'g' && sym[0] != 'l' && sym[0] != 'p')
         {
             exprbin(0);
         }
@@ -748,15 +788,32 @@ exprassign()
                     emit(oldid);
                     emit("\n");
                 }
-                else
+                else if(sym[0] == 'p')
                 {
                     emit("\tLXI D,");
                     emitint(sym[1]);
                     emit("\n");
                     emit("\tDAD D\n");
                 }
-                emit("\tMOV A,C\n");
+                else if(sym[0] == 'l')
+                {
+                    emit("\tMVI D,");
+                    emitint(sym[1]);
+                    emit("\n");
+                    emit("\tMOV A,L\n");
+                    emit("\tSUB D\n");
+                    emit("\tMOV L,A\n");
+                    emit("\tMOV A,H\n");
+                    emit("\tMVI D,0\n");
+                    emit("\tSBB D\n");
+                    emit("\tMOV H,A\n");
+                }
+                else
+                {
+                    fatal("Invalid variable in assignment expression");
+                }
                 emit("\tXCHG\n");
+                emit("\tMOV A,C\n");
                 emit("\tSTAX D\n");
                 emit("\tINX D\n");
                 emit("\tMOV A,B\n");
@@ -790,7 +847,6 @@ expr()
  * NOTE(driverfury): Statements syntax
  *
  * stmt ::= stmtblk
- *        | (T_CHAR | T_INT) T_ID ';'
  *        | T_IF '(' expr ')' stmt [T_ELSE stmt]?
  *        | T_WHILE '(' expr ')' stmt
  *        | T_RETURN expr? ';'
@@ -804,25 +860,13 @@ void stmtblk();
 void
 stmt()
 {
+    char lbl1[32];
+    char lbl2[32];
+    char lbl3[32];
+
     if(tk == T_LBRACE)
     {
         stmtblk();
-    }
-    else if(tk == T_INT || tk == T_CHAR)
-    {
-        char type;
-        char size;
-
-             if(tk == T_INT)  { type = 'i'; size = 2; }
-        else if(tk == T_CHAR) { type = 'c'; size = 2; }
-
-        expect(T_ID);
-
-        addsym(id, 'l', foff, type, 0);
-        foff += size;
-
-        expect(T_SEMI);
-        next();
     }
     else if(tk == T_RETURN)
     {
@@ -853,13 +897,9 @@ stmt()
     }
     else if(tk == T_IF)
     {
-        char ifblk[32];
-        char elseblk[32];
-        char endif[32];
-
-        genlbl(ifblk);
-        genlbl(elseblk);
-        genlbl(endif);
+        genlbl(lbl1);
+        genlbl(lbl2);
+        genlbl(lbl3);
 
         expect(T_LPAREN);
         next();
@@ -874,24 +914,24 @@ stmt()
         emit("\tMOV A,B\n");
         emit("\tORA A\n");
         emit("\tJNZ ");
-        emit(ifblk);
+        emit(lbl1);
         emit("\n");
         emit("\tMOV A,C\n");
         emit("\tORA A\n");
         emit("\tJNZ ");
-        emit(ifblk);
+        emit(lbl1);
         emit("\n");
         emit("\tJMP ");
-        emit(elseblk);
+        emit(lbl2);
         emit("\n");
 
-        /* ifblk: */
-        emit(ifblk);
+        /* lbl1: */
+        emit(lbl1);
         emit(":\n");
         stmt();
 
-        /* elseblk: */
-        emit(elseblk);
+        /* lbl2: */
+        emit(lbl2);
         emit(":\n");
         if(tk == T_ELSE)
         {
@@ -899,22 +939,18 @@ stmt()
             stmt();
         }
 
-        /* endif: */
-        emit(endif);
+        /* lbl3: */
+        emit(lbl3);
         emit(":\n");
     }
     else if(tk == T_WHILE)
     {
-        char cond[32];
-        char blk[32];
-        char endwhl[32];
+        genlbl(lbl1);
+        genlbl(lbl2);
+        genlbl(lbl3);
 
-        genlbl(cond);
-        genlbl(blk);
-        genlbl(endwhl);
-
-        /* cond: */
-        emit(cond);
+        /* lbl1: */
+        emit(lbl1);
         emit(":\n");
         expect(T_LPAREN);
         next();
@@ -928,27 +964,27 @@ stmt()
         emit("\tMOV A,B\n");
         emit("\tORA A\n");
         emit("\tJNZ ");
-        emit(blk);
+        emit(lbl2);
         emit("\n");
         emit("\tMOV A,C\n");
         emit("\tORA A\n");
         emit("\tJNZ ");
-        emit(blk);
+        emit(lbl2);
         emit("\n");
         emit("\tJMP ");
-        emit(endwhl);
+        emit(lbl3);
         emit("\n");
 
-        /* blk: */
-        emit(blk);
+        /* lbl2: */
+        emit(lbl2);
         emit(":\n");
         stmt();
         emit("\tJMP ");
-        emit(cond);
+        emit(lbl1);
         emit("\n");
 
-        /* endwhl: */
-        emit(endwhl);
+        /* lbl3: */
+        emit(lbl3);
         emit(":\n");
     }
     else
@@ -984,6 +1020,21 @@ stmtblk()
     next();
 }
 
+/**
+ * NOTE(driverfury): Program syntax
+ *
+ * prog ::= type T_ID ';'
+ *        | type T_ID '(' (param (',' param)* )? ')' funcdef
+ *
+ * type ::= T_CHAR | T_INT
+ *
+ * param ::= type T_ID
+ *
+ * funcdef ::= '{' locvar* stmt* '}'
+ *
+ * locvar = type T_ID ';'
+ */
+
 void
 funcpre()
 {
@@ -996,17 +1047,111 @@ funcpre()
 }
 
 void
+param(int offset)
+{
+    char type;
+
+    type = 0;
+         if(tk == T_INT)  { type = 'i'; }
+    else if(tk == T_CHAR) { type = 'c'; }
+    else { fatal("Invalid function argument"); }
+
+    next();
+    if(tk != T_ID)
+    {
+        fatal("Invalid function argument identifier");
+    }
+    addsym(id, 'p', offset, type, 0);
+    next();
+}
+
+void
+locvar()
+{
+    char type;
+    char size;
+
+    if(tk == T_INT || tk == T_CHAR)
+    {
+             if(tk == T_INT)  { type = 'i'; size = 2; }
+        else if(tk == T_CHAR) { type = 'c'; size = 2; }
+
+        expect(T_ID);
+
+        addsym(id, 'l', foff, type, 0);
+        foff += size;
+
+        if(size == 2)
+        {
+            emit("\tPUSH B\n");
+        }
+        else
+        {
+            fatal("Invalid size for local variable");
+        }
+
+        expect(T_SEMI);
+        next();
+    }
+    else
+    {
+        fatal("Invalid local variable declaration");
+    }
+}
+
+void
+funcdef()
+{
+    foff = 2;
+
+    if(tk != T_LBRACE)
+    {
+        fatal("Invalid function definition");
+    }
+    next();
+
+    /* Local variables */
+    emit("\t;local variables\n");
+    while(tk == T_INT || tk == T_CHAR)
+    {
+        locvar();
+    }
+    emit("\n");
+
+    /* Statements */
+    emit("\t;func definition\n");
+    while(tk != T_RBRACE && tk != T_EOF)
+    {
+        stmt();
+    }
+    emit("\n");
+
+    if(tk != T_RBRACE)
+    {
+        fatal("Missing '}' in function definition");
+    }
+
+    next();
+}
+
+void
 prog()
 {
     char forv;
     char type;
-    char numparams;
+    char nparams;
+
+    char symid[32];
+    int endloop;
+    int poff;
+
+    int i;
 
     line = 1;
 
     forv = 0;
     type = 0;
-    numparams = 0;
+    nparams = 0;
 
     emit("\tORG 0x100\n\n");
     emit("\tPUSH H ;return value\n");
@@ -1015,7 +1160,15 @@ prog()
     emit("\tMVI C,0\n");
     emit("\tCALL 5\n");
     emit("\tRET\n\n");
-    emit("\tHLT\n\n");
+    emit("\tHLT\n");
+    emit("\n");
+
+    /* Utilities */
+
+    /* Computes HL=HL-DE */
+    emit(".ADD16:\n");
+    /* TODO */
+    emit("\n");
 
     /* Small C library for CP/M 2.2 on i8080 */
 
@@ -1037,6 +1190,7 @@ prog()
     emit("\tPOP D\n");
     emit("\tPOP H\n");
     emit("\tRET\n");
+    emit("\n");
     addsym("putchar", 'f', 0, 'i', 1);
 
     next();
@@ -1044,8 +1198,6 @@ prog()
     {
         if(tk == T_INT || tk == T_CHAR)
         {
-            char symid[32];
-
                  if(tk == T_INT)  { type = 'i'; }
             else if(tk == T_CHAR) { type = 'c'; }
 
@@ -1057,23 +1209,58 @@ prog()
             if(tk == T_LPAREN)
             {
                 forv = 'f';
-                /* TODO(driverfury): parse params */
-                expect(T_RPAREN);
 
-                /**
-                 * TODO(driverfury): Wrong!! The offset for
-                 * a param is 4+(nparms-index-1)
-                 * where nparams is the number of params
-                 * and index is the position of the current
-                 * params (starting from 0).
-                 */
-                foff = 4;
+                next();
+
+                nparams = 0;
+                if(tk != T_RPAREN)
+                {
+                    /* TODO(driverfury):
+                     * Potential bug: what is the ')' is not encountered in
+                     * the first 128 characters??
+                     */
+                    /* nparams = count how many commas before the '(' */
+                    i = 0;
+                    look(buff, 128, 0);
+                    while(i < 128 && buff[i] != ')')
+                    {
+                        if(buff[i] == ',')
+                        {
+                            ++nparams;
+                        }
+                        ++i;
+                    }
+
+                    /* parse function arguments */
+                    endloop = 0;
+                    poff = (nparams+1)*2;
+                    while(!endloop)
+                    {
+                        param(poff);
+                        ++nparams;
+                        poff -= 2;
+                        if(tk == T_COMMA)
+                        {
+                            next();
+                        }
+                        else
+                        {
+                            endloop = 1;
+                        }
+                    }
+                }
+
+                if(tk != T_RPAREN)
+                {
+                    fatal("Expected ')' at the end of function arguments");
+                }
 
                 if(peek() == T_LBRACE)
                 {
                     next();
                     funcpre();
-                    stmtblk();
+                    emit("\n");
+                    funcdef();
                 }
                 else
                 {
@@ -1091,12 +1278,13 @@ prog()
                 next();
             }
 
-            addsym(symid, forv, 0, type, numparams);
+            addsym(symid, forv, 0, type, nparams);
         }
         else
         {
             fatal("Invalid token");
         }
+        emit("\n");
     }
 }
 
