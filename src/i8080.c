@@ -670,14 +670,19 @@ i8080exec(i8080 *cpu)
                 cpu->pc += 2;
                 if(cpu->c == 9)
                 {
+                    /*
+                    char *str;
                     tmp16 = de;
-                    char *str = (char *)(&memory[tmp16 + 3]);
+                    str = (char *)(&memory[tmp16 + 3]);
+                    */
                     /* NOTE(driverfury): i8080 strings generally terminate with '$' */
+                    /*
                     while(*str != '$')
                     {
                         printf("%c", *str);
                         ++str;
                     }
+                    */
                 }
                 else if(cpu->c == 2)
                 {

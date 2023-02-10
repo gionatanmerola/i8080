@@ -305,10 +305,39 @@ main(int argc, char *argv[])
         printf(" | %s\n", buff);
 
         c = 0;
-        fread(&c, 1, 1, stdin);
-        if(c == 0 || c == 'q')
+        while(c != 'n')
         {
-            break;
+            c = 0;
+            fread(&c, 1, 1, stdin);
+            if(c == 0 || c == 'q')
+            {
+                break;
+            }
+            else if(c == 'r')
+            {
+                printf("A:  %.2x\n", cpu.a);
+                printf("B:  %.2x\n", cpu.b);
+                printf("C:  %.2x\n", cpu.c);
+                printf("D:  %.2x\n", cpu.d);
+                printf("E:  %.2x\n", cpu.e);
+                printf("H:  %.2x\n", cpu.h);
+                printf("L:  %.2x\n", cpu.l);
+                printf("SP: %.4x\n", cpu.sp);
+            }
+            else if(c == 's')
+            {
+                int i;
+
+                for(i = 15;
+                    i >= 0;
+                    --i)
+                {
+                    printf("%.2x ", mem[cpu.sp - i]);
+                }
+                printf("\n");
+                for(i = 1;
+                    i 
+            }
         }
 #endif
     }
